@@ -1,0 +1,403 @@
+﻿@page "/"
+@using System.Globalization
+@using System.Text
+@using System.ComponentModel.DataAnnotations
+@using ThereforeAddUsers.Models
+@inject IWebHostEnvironment env
+@inject IHttpContextAccessor HttpContextAccessor
+
+<PageTitle>Therefore Add Users</PageTitle>
+<EditForm Model="@inputData" OnValidSubmit="HandleValidSubmit">
+    <div class="container">
+        <h1 class="text-center">Add Users</h1>
+
+        <div class="row justify-content-center">
+            <div class="col-md-8 mb-3">
+                <div class="card">
+                    <div class="card-header">
+                        Add Therefore users by bulk upload from a CSV file <button type="button" @onclick="HandleHelpClick" class="btn btn-outline-dark" style="float:right">?</button>
+                    </div>
+                    <div class="card-body @(showHelp?"":"collapse")">
+                        Enter Tenant Name along with a Username and Password for a user who has the rights to add users and groups.<br />
+                        Download the  <a href="javascript:void(0)" onclick="downloadFile('./sample/users.csv')">sample</a> CSV file and modify as appropriate. Passwords can be specified for individual users in the CSV, or if not specified the Default Password on this page will be used.<br />
+                        Groups should be separated by a ; ie: MyGroup1;MyGroup2<br />
+                        If you wish the user to have to change their password on first login, make sure the checkbox is ticked.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <ValidationSummary></ValidationSummary>
+
+        <div class="row mb-3 justify-content-center">
+            <div class="col-md-8">
+                <h2>Therefore Connection</h2>
+                <div class="mb-3">
+                    <label for="tenantName">Tenant Name</label>
+                    <input type="text" class="form-control" id="tenantName" placeholder="Tenant Name" @bind="inputData.tenantName" required>
+                </div>
+                <div class="mb-3">
+                    <label for="userName">Username</label>
+                    <input type="text" class="form-control" id="userName" placeholder="Username" @bind="inputData.username" required>
+                </div>
+                <div class="mb-3">
+                    <label for="userPassword">Password</label>
+                    <input type="password" class="form-control" id="userPassword" placeholder="Password" @bind="inputData.password" required>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mb-3 justify-content-center">
+            <div class="col-md-8">
+                <h2>CSV File</h2>
+                <p>Download a <a href="javascript:void(0)" onclick="downloadFile('./sample/users.csv')">sample</a> CSV file</p>
+                <script>
+                    function downloadFile(url) {
+                        var link = document.createElement('a');
+                        link.href = url;
+                        link.download = url.split('/').pop();
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                    }
+                </script>
+                <InputFile OnChange="HandleFileSelected" @key=@inputFileGuid required />
+            </div>
+        </div>
+        <div class="row mb-3 justify-content-center">
+            <div class="col-md-8">
+                <h2>Options</h2>
+                <div class="mb-3">
+                    <label for="defaultPassword">Default Password</label>
+                    <input type="text" class="form-control" id="defaultPassword" placeholder="Password if none specified in CSV" @bind="inputData.defaultPassword" required>
+                </div>
+                <div class="form-check mb-3">
+                    <input class="form-check-input" type="checkbox" value="" id="passwordChangeRequired" @bind="passwordChangeRequired">
+                    <label class="form-check-label" for="passwordChangeRequired">
+                        User must change password on login
+                    </label>
+                </div>
+                <div class="form-check mb-3">
+                    <input class="form-check-input" type="checkbox" value="" id="createGroups" @bind="createGroups">
+                    <label class="form-check-label" for="createGroups">
+                        Create groups if they don't exist
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mb-3 justify-content-center">
+            <div class="col-md-8">
+            <button type="submit" class="btn btn-primary mb-3">Process</button>
+            </div>
+        </div>
+        
+
+        <div class="row mb-3 justify-content-center">
+            <div class="col-md-8">
+                <div class="progress" role="progressbar" aria-label="Basic example" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                    <div class="progress-bar" style="width: @progress%"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mb-3 justify-content-center">
+            <div class="col-md-8">
+                <select class="form-select" multiple size="10" style="overflow-x: scroll;">
+                    @for (int i = 0; i < statusList.Count; i++)
+                    {
+                        @if (i == statusList.Count - 1)
+                        {
+                            <option selected>@statusList[i]</option>
+                        }
+                        else
+                        {
+                            <option>@statusList[i]</option>
+                        }
+                    }
+                </select>
+            </div>
+        </div>
+    </div>
+</EditForm>
+
+
+@code {
+    public class InputData
+    {
+        [Required]
+        public string? tenantName = "";
+        [Required]
+        public string username = "";
+        [Required]
+        public string password = "";
+        [Required]
+        public string defaultPassword = "P@ssw0rd!";
+    }
+    public InputData inputData = new();
+
+    private Guid inputFileGuid = Guid.NewGuid();
+    private List<string> statusList = new List<string>();
+    private int progress = 0;
+    private bool createGroups = false;
+    private bool passwordChangeRequired = true;
+    private string? filePath;
+    private bool showHelp = false;
+
+    private string LastError = "";
+
+    private const string EXECUTE_USERS_QUERY_ENDPOINT = "/theservice/v0001/restun/ExecuteUsersQuery";
+    private const string CREATE_USER_ENDPOINT = "/theservice/v0001/restun/CreateUser";
+    private const string UPDATE_USER_GROUP_ASSIGNMENT_ENDPOINT = "/theservice/v0001/restun/UpdateUserGroupAssignment";
+    private const string BASE_THEREFORE_URL = "https://{tenant}.thereforeonline.com";
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            LogEvent($"Connected");
+        }
+    }
+
+    public void HandleHelpClick()
+    {
+        showHelp = !showHelp;
+    }
+
+    private async Task HandleFileSelected(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        var fileName = file.Name;
+        filePath = Path.Combine(env.WebRootPath, "upload", $"{Guid.NewGuid()}_{fileName}");
+        using (var stream = new FileStream(filePath, FileMode.Create))
+        {
+            await e.File.OpenReadStream().CopyToAsync(stream);
+        }
+        UpdateStatus($"Uploaded {fileName}");
+        if (!await ProcessCSV(true))
+        {
+            await DeleteUpload();
+        }
+    }
+
+    public async Task HandleValidSubmit()
+    {
+        progress = 0;
+        if (await ProcessCSV())
+        {
+            UpdateStatus("Finished");
+        }
+        else
+        {
+            UpdateStatus($"Error: {LastError}");
+        }
+        await DeleteUpload();
+    }
+
+    private void LogEvent(string msg)
+    {
+        string ip = HttpContextAccessor.HttpContext?.Connection.RemoteIpAddress?.ToString()??"";
+        string timeStamp = DateTime.Now.ToString("HH:mm:ss.FFF");
+        Console.WriteLine($"{timeStamp} [{ip}] - {msg}");
+    }
+
+    private string GetBasicAuth(string username, string password)
+    {
+        var credentials = $"{username}:{password}";
+        var base64Credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes(credentials));
+        return $"Basic {base64Credentials}";
+    }
+
+    private void ResetInputFile()
+    {
+        inputFileGuid = Guid.NewGuid();
+        filePath = null;
+    }
+
+    private async Task<Tuple<bool, string>> DoThereforeRequest(string strContent, string endpoint)
+    {
+        var client = new HttpClient();
+        var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
+        request.Headers.Add("TenantName", inputData.tenantName);
+        var auth = GetBasicAuth(inputData.username, inputData.password);
+        request.Headers.Add("Authorization", auth);
+        var content = new StringContent(strContent, null, "application/json");
+        request.Content = content;
+        var response = await client.SendAsync(request);
+        var result = response.IsSuccessStatusCode ? await response.Content.ReadAsStringAsync() : "Error";
+        return new Tuple<bool, string>(response.IsSuccessStatusCode, result);
+    }
+
+
+    private async Task DeleteUpload()
+    {
+        if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
+        {
+            await Task.Run(() => File.Delete(filePath));
+            ResetInputFile();
+        }
+    }
+
+    private async Task<bool> ProcessCSV(bool checkCSV = false)
+    {
+        if (string.IsNullOrEmpty(filePath))
+        {
+            UpdateStatus("No file uploaded");
+            return false;
+        }
+        var config = new CsvHelper.Configuration.CsvConfiguration(CultureInfo.InvariantCulture)
+            {
+                PrepareHeaderForMatch = args => args.Header.ToLower()
+            };
+        try
+        {
+            using (var reader = new StreamReader(filePath))
+            using (var csv = new CsvHelper.CsvReader(reader, config))
+            {
+                if (checkCSV)
+                {
+                    try
+                    {
+                        csv.Read();
+                        var userRecord = csv.GetRecord<UserRecord>();
+                    }
+                    catch
+                    {
+                        UpdateStatus($"Error reading CSV. Check the format.");
+                        return false;
+                    }
+                    UpdateStatus("CSV appears valid");
+                    return true;
+                }
+
+                int recordCount = File.ReadAllLines(filePath).Length - 1;
+                int currentLine = 1;
+                await foreach (var record in csv.GetRecordsAsync<UserRecord>())
+                {
+                    UpdateStatus($"Processing {record.DisplayName}");
+                    await ProcessRecord(record);
+                    progress = (int)((double)currentLine / recordCount * 100);
+                    currentLine++;
+                }
+                progress = 100;
+            }
+        }
+        catch (Exception ex)
+        {
+            LastError = ex.Message;
+            return false;
+        }
+        return true;
+    }
+
+    private async Task ProcessRecord(UserRecord record)
+    {
+        var userId = await GetUserOrGroupId(record.UserName, ExecuteUsersQueryFlagsEnum.FindAllusers);
+        if (userId == 0)
+        {
+            var result = await CreateUserOrGroup(record, UserTypeEnum.SingleUser);
+            UpdateStatus(result ? $"Created user: {record.UserName}" : $"Error creating user: {record.UserName}");
+            if (result)
+            {
+                userId = await GetUserOrGroupId(record.UserName, ExecuteUsersQueryFlagsEnum.FindAllusers);
+            }
+        }
+        else
+        {
+            UpdateStatus($"{record.DisplayName} already exists as {record.UserName}");
+        }
+
+        if (userId == 0)
+        {
+            UpdateStatus($"Cancelling processing for {record.DisplayName}");
+            return;
+        }
+
+        foreach (var group in record.Groups)
+        {
+            // check group exists
+            var groupId = await GetUserOrGroupId(group, ExecuteUsersQueryFlagsEnum.FindAllGroups);
+            UpdateStatus($"Group {group} {(groupId == 0 ? "does NOT exist" : "exists")}");
+            // check if need to create groups if they dont exist
+            if (createGroups && groupId == 0)
+            {
+                // need to create group
+                var groupToAdd = new UserRecord() { UserName = group };
+                var groupResult = await CreateUserOrGroup(groupToAdd, UserTypeEnum.UserGroup);
+                if (groupResult)
+                {
+                    groupId = await GetUserOrGroupId(group, ExecuteUsersQueryFlagsEnum.FindAllGroups);
+                }
+                UpdateStatus($"{(groupId == 0 ? "Could not create group" : "Created group")} {group}");
+            }
+            // add user to group
+            if (groupId > 0)
+            {
+                var addUserResult = await AddUserToGroup(userId, groupId);
+                UpdateStatus($"{record.UserName}{(addUserResult ? "" : " NOT")} added to {group}");
+            }
+        }
+    }
+
+    private async Task<bool> AddUserToGroup(int userId, int groupId)
+    {
+        var user = new UpdateUserGroupUser { Id = userId };
+        var thereforeGroupAssignment = new ThereforeGroup { Id = groupId };
+        var assignment = new Assignment { Remove = false, ThereforeGroup = thereforeGroupAssignment };
+        List<Assignment> assignmentList = new List<Assignment>();
+        assignmentList.Add(assignment);
+        UpdateUserGroupAssignmentRequest groupRequest = new UpdateUserGroupAssignmentRequest { Assignments = assignmentList, User = user };
+        var strContent = Newtonsoft.Json.JsonConvert.SerializeObject(groupRequest);
+        var endPoint = GetFullEndPoint(UPDATE_USER_GROUP_ASSIGNMENT_ENDPOINT);
+        var result = await DoThereforeRequest(strContent, endPoint);
+        return result.Item1;
+    }
+
+    private async Task<bool> CreateUserOrGroup(UserRecord record, UserTypeEnum userType)
+    {
+        User user = new User()
+            {
+                Disabled = false,
+                DisplayName = record.DisplayName,
+                SMTP = record.Email,
+                UserName = record.UserName,
+                UserType = userType,
+                OneTimePwd = passwordChangeRequired
+            };
+        CreateUserRequest userRequest = new CreateUserRequest()
+            {
+                Password = string.IsNullOrEmpty(record.Password) ? inputData.defaultPassword : record.Password,
+                User = user
+            };
+        var strContent = Newtonsoft.Json.JsonConvert.SerializeObject(userRequest);
+        var endPoint = GetFullEndPoint(CREATE_USER_ENDPOINT);
+        var result = await DoThereforeRequest(strContent, endPoint);
+        return result.Item1;
+    }
+
+    private async Task<int> GetUserOrGroupId(string strquery, ExecuteUsersQueryFlagsEnum queryType)
+    {
+        int res = 0;
+        ExecuteUsersQueryRequest query = new ExecuteUsersQueryRequest() { Flags = queryType, Query = strquery };
+        var strContent = Newtonsoft.Json.JsonConvert.SerializeObject(query);
+        var endPoint = GetFullEndPoint(EXECUTE_USERS_QUERY_ENDPOINT);
+        var result = await DoThereforeRequest(strContent, endPoint);
+        if (!result.Item1) return res;
+        var users = Newtonsoft.Json.JsonConvert.DeserializeObject<ExecuteUsersQueryResponse>(result.Item2);
+        var match = users?.Users.Where(x => string.Compare(strquery, x.UserName, true) == 0).FirstOrDefault();
+        return match?.UserId ?? 0;
+    }
+
+    private string GetFullEndPoint(string endPoint)
+    {
+        return $"{BASE_THEREFORE_URL.Replace("{tenant}", inputData.tenantName)}{endPoint}";
+    }
+
+    private void UpdateStatus(string msg)
+    {
+        string timeStamp = DateTime.Now.ToString("HH:mm:ss.FFF");
+        statusList.Add($"{timeStamp} {msg}");
+        LogEvent(msg);
+        StateHasChanged();
+    }
+}

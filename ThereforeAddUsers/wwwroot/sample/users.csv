@@ -1,0 +1,5 @@
+DisplayName,Email,Password,UserName,GroupList
+John Smith,john.smith@domain.com,mypassword,jsmith,group1;group2;group3
+Name 2,email2@domain.com,,name2,group1;group3
+Name 3,email3@domain.com,,name3,group4
+
